@@ -176,7 +176,7 @@ export default function LoginPage() {
               className="text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
               {mode === 'login' ? (
-                <>Don't have an account? <span className="text-primary font-medium">Sign up</span></>
+                <>Don&apos;t have an account? <span className="text-primary font-medium">Sign up</span></>
               ) : (
                 <>Already have an account? <span className="text-primary font-medium">Sign in</span></>
               )}

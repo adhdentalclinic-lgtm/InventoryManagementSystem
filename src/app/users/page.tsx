@@ -8,7 +8,7 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/Badge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { DataTable } from '@/components/ui/DataTable'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card'
+import { Card } from '@/components/ui/Card'
 import { Shield, User, Search, Users, Crown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -27,10 +27,6 @@ export default function UsersPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    fetchUsers()
-  }, [])
-
   async function fetchUsers() {
     setLoading(true)
     const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false })
@@ -41,6 +37,10 @@ export default function UsersPage() {
     }
     setLoading(false)
   }
+
+  useEffect(() => {
+    fetchUsers()
+  }, [])
 
   async function toggleRole(userId: string, currentRole: 'admin' | 'staff') {
     const newRole = currentRole === 'admin' ? 'staff' : 'admin'

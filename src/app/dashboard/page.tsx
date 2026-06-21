@@ -20,10 +20,64 @@ interface DashboardMetrics {
 
 interface RecentActivity {
   id: string
-  type: string
+  type: 'IN' | 'OUT'
   description: string
   amount?: number
   created_at: string
+}
+
+interface ProductMetricsRow {
+  id: string
+  name: string
+  sku: string
+  quantity: number
+  cost_price: number
+}
+
+interface MovementRow {
+  id: string
+  type: 'IN' | 'OUT'
+  quantity: number
+  created_at: string
+  products?: { name: string | null }
+}
+
+async function fetchMetrics(setLoading: React.Dispatch<React.SetStateAction<boolean>>, setMetrics: React.Dispatch<React.SetStateAction<DashboardMetrics>>, setLowStock: React.Dispatch<React.SetStateAction<{ name: string; sku: string; quantity: number }[]>>, setRecentActivity: React.Dispatch<React.SetStateAction<RecentActivity[]>>) {
+  setLoading(true)
+  try {
+    const [{ data: products }, { data: cashIn }, { data: cashOut }, { data: movements }] = await Promise.all([
+      supabase.from<ProductMetricsRow>('products').select('quantity, cost_price, name, sku'),
+      supabase.from<{ amount: number }>('cashflow').select('amount').eq('type', 'IN'),
+      supabase.from<{ amount: number }>('cashflow').select('amount').eq('type', 'OUT'),
+      supabase.from<MovementRow>('stock_movements').select('*, products(name)').order('created_at', { ascending: false }).limit(5),
+    ])
+
+    const totalItems = products?.length || 0
+    const totalQuantity = products?.reduce((sum, p) => sum + p.quantity, 0) || 0
+    const totalCOGS = products?.reduce((sum, p) => sum + p.quantity * p.cost_price, 0) || 0
+    const totalCashIn = cashIn?.reduce((sum, c) => sum + c.amount, 0) || 0
+    const totalCashOut = cashOut?.reduce((sum, c) => sum + c.amount, 0) || 0
+    const netCashflow = totalCashIn - totalCashOut
+
+    setMetrics({ totalItems, totalQuantity, totalCOGS, totalCashIn, totalCashOut, netCashflow })
+
+    const low = (products || [])
+      .filter((p) => p.quantity <= 10)
+      .slice(0, 5)
+      .map((p) => ({ name: p.name, sku: p.sku, quantity: p.quantity }))
+    setLowStock(low)
+
+    const activity: RecentActivity[] = (movements || []).map((m) => ({
+      id: m.id,
+      type: m.type,
+      description: `${m.type === 'IN' ? 'Stock in' : 'Stock out'}: ${m.products?.name || 'Unknown'} (${m.quantity} units)`,
+      amount: m.quantity,
+      created_at: m.created_at,
+    }))
+    setRecentActivity(activity)
+  } finally {
+    setLoading(false)
+  }
 }
 
 export default function DashboardPage() {
@@ -40,48 +94,10 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchMetrics()
-    const interval = setInterval(fetchMetrics, 15000)
+    fetchMetrics(setLoading, setMetrics, setLowStock, setRecentActivity)
+    const interval = setInterval(() => fetchMetrics(setLoading, setMetrics, setLowStock, setRecentActivity), 15000)
     return () => clearInterval(interval)
   }, [])
-
-  async function fetchMetrics() {
-    setLoading(true)
-    try {
-      const [{ data: products }, { data: cashIn }, { data: cashOut }, { data: movements }] = await Promise.all([
-        supabase.from('products').select('quantity, cost_price'),
-        supabase.from('cashflow').select('amount').eq('type', 'IN'),
-        supabase.from('cashflow').select('amount').eq('type', 'OUT'),
-        supabase.from('stock_movements').select('*, products(name)').order('created_at', { ascending: false }).limit(5),
-      ])
-
-      const totalItems = products?.length || 0
-      const totalQuantity = products?.reduce((sum, p) => sum + (p.quantity || 0), 0) || 0
-      const totalCOGS = products?.reduce((sum, p) => sum + (p.quantity || 0) * (p.cost_price || 0), 0) || 0
-      const totalCashIn = cashIn?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
-      const totalCashOut = cashOut?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0
-      const netCashflow = totalCashIn - totalCashOut
-
-      setMetrics({ totalItems, totalQuantity, totalCOGS, totalCashIn, totalCashOut, netCashflow })
-
-      const low = (products || [])
-        .map((p, i) => ({ name: `Product ${i}`, sku: `SKU-${i}`, quantity: p.quantity || 0 }))
-        .filter((p) => p.quantity <= 10)
-        .slice(0, 5)
-      setLowStock(low)
-
-      const activity: RecentActivity[] = (movements || []).map((m: any) => ({
-        id: m.id,
-        type: m.type,
-        description: `${m.type === 'IN' ? 'Stock in' : 'Stock out'}: ${m.products?.name || 'Unknown'} (${m.quantity} units)`,
-        amount: m.quantity,
-        created_at: m.created_at,
-      }))
-      setRecentActivity(activity)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const formatCurrency = (val: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val)

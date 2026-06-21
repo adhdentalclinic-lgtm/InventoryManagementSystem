@@ -10,8 +10,8 @@ import { Modal } from '@/components/ui/Modal'
 import { Badge } from '@/components/ui/Badge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { DataTable } from '@/components/ui/DataTable'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card'
-import { ArrowDownLeft, ArrowUpRight, X, Search, Package, TrendingDown, TrendingUp } from 'lucide-react'
+import { Card } from '@/components/ui/Card'
+import { ArrowDownLeft, ArrowUpRight, Search, Package } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Product {
