@@ -17,6 +17,11 @@ import {
   Menu,
   X,
   ChevronRight,
+  Layers,
+  Slash,
+  BarChart3,
+  Activity,
+  Settings,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -28,6 +33,11 @@ const navItems = [
 
 const adminNavItems = [
   { label: 'Products', href: '/inventory', icon: Package, role: 'admin' },
+  { label: 'Low Stocks', href: '/low-stocks', icon: Layers, role: 'admin' },
+  { label: 'Out of Stock', href: '/out-of-stock', icon: Slash, role: 'admin' },
+  { label: 'Sales Analytics', href: '/sales-analytics', icon: BarChart3, role: 'admin' },
+  { label: 'Activity Logs', href: '/activity-logs', icon: Activity, role: 'admin' },
+  { label: 'Settings', href: '/settings', icon: Settings, role: 'admin' },
   { label: 'Users', href: '/users', icon: Users, role: 'admin' },
 ]
 
