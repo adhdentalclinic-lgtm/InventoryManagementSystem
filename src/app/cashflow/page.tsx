@@ -5,7 +5,15 @@ import { supabase } from '@/lib/supabase'
 import DashboardLayout from '@/components/DashboardLayout'
 import { useAuth } from '@/lib/auth'
 import { toast } from 'sonner'
-import { TrendingUp, TrendingDown, X, Search, Wallet } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
+import { Modal } from '@/components/ui/Modal'
+import { Badge } from '@/components/ui/Badge'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { DataTable } from '@/components/ui/DataTable'
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card'
+import { TrendingUp, TrendingDown, X, Search, Wallet, Calendar } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 interface CashflowEntry {
   id: string
@@ -24,6 +32,7 @@ export default function CashflowPage() {
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<CashflowEntry | null>(null)
   const [form, setForm] = useState({ type: 'IN' as 'IN' | 'OUT', amount: 0, description: '', category: '' })
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [totals, setTotals] = useState({ in: 0, out: 0, net: 0 })
 
@@ -45,8 +54,18 @@ export default function CashflowPage() {
     setLoading(false)
   }
 
+  function validateForm() {
+    const errors: Record<string, string> = {}
+    if (!form.description.trim()) errors.description = 'Description is required'
+    if (form.amount <= 0) errors.amount = 'Amount must be greater than 0'
+    setFormErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (!validateForm()) return
+
     if (editing) {
       if (!isAdmin) {
         toast.error('Only admins can edit entries')
@@ -89,6 +108,7 @@ export default function CashflowPage() {
   function openEdit(entry: CashflowEntry) {
     setEditing(entry)
     setForm({ type: entry.type, amount: entry.amount, description: entry.description, category: entry.category || '' })
+    setFormErrors({})
     setShowModal(true)
   }
 
@@ -100,61 +120,144 @@ export default function CashflowPage() {
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val)
 
-  return (
-    <DashboardLayout>
-      <div className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">Cashflow</h1>
-            <p className="text-sm text-muted-foreground mt-1">Track all cash in and out transactions</p>
-          </div>
+  const columns = [
+    {
+      key: 'date',
+      header: 'Date',
+      render: (row: CashflowEntry) => (
+        <div className="flex items-center gap-2">
+          <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="text-muted-foreground">{new Date(row.created_at).toLocaleDateString()}</span>
+        </div>
+      ),
+      width: '130px',
+    },
+    {
+      key: 'type',
+      header: 'Type',
+      render: (row: CashflowEntry) => (
+        <Badge variant={row.type === 'IN' ? 'success' : 'danger'} dot>
+          {row.type}
+        </Badge>
+      ),
+      width: '100px',
+    },
+    {
+      key: 'description',
+      header: 'Description',
+      render: (row: CashflowEntry) => (
+        <span className="text-foreground">{row.description}</span>
+      ),
+    },
+    {
+      key: 'category',
+      header: 'Category',
+      render: (row: CashflowEntry) => (
+        row.category ? <Badge variant="default">{row.category}</Badge> : <span className="text-muted-foreground">-</span>
+      ),
+      width: '140px',
+    },
+    {
+      key: 'amount',
+      header: 'Amount',
+      align: 'right' as const,
+      render: (row: CashflowEntry) => (
+        <span className={cn(
+          'font-semibold',
+          row.type === 'IN' ? 'text-success' : 'text-danger'
+        )}>
+          {row.type === 'IN' ? '+' : '-'}{formatCurrency(row.amount)}
+        </span>
+      ),
+      width: '140px',
+    },
+    ...(isAdmin ? [{
+      key: 'actions',
+      header: '',
+      align: 'right' as const,
+      width: '120px',
+      render: (row: CashflowEntry) => (
+        <div className="flex items-center justify-end gap-1">
           <button
-            onClick={() => { setEditing(null); setForm({ type: 'IN', amount: 0, description: '', category: '' }); setShowModal(true) }}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+            onClick={() => openEdit(row)}
+            className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors text-xs font-medium"
           >
-            <Wallet className="h-4 w-4" />
-            Add Entry
+            Edit
+          </button>
+          <button
+            onClick={() => handleDelete(row.id)}
+            className="rounded-lg p-2 text-muted-foreground hover:bg-danger-muted hover:text-danger transition-colors text-xs font-medium"
+          >
+            Delete
           </button>
         </div>
+      ),
+    }] : []),
+  ]
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="rounded-xl bg-card border border-border p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Total Cash In</p>
-                <p className="mt-2 text-2xl font-bold text-emerald-500">{formatCurrency(totals.in)}</p>
-              </div>
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
-                <TrendingUp className="h-5 w-5 text-emerald-500" />
-              </div>
-            </div>
+  return (
+    <DashboardLayout>
+      <div className="space-y-6 animate-fade-in">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground tracking-tight">Cashflow</h1>
+            <p className="text-sm text-muted-foreground mt-1">Track all financial transactions</p>
           </div>
-          <div className="rounded-xl bg-card border border-border p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Total Cash Out</p>
-                <p className="mt-2 text-2xl font-bold text-rose-500">{formatCurrency(totals.out)}</p>
-              </div>
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/10">
-                <TrendingDown className="h-5 w-5 text-rose-500" />
-              </div>
-            </div>
-          </div>
-          <div className="rounded-xl bg-card border border-border p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">Net Balance</p>
-                <p className={`mt-2 text-2xl font-bold ${totals.net >= 0 ? 'text-gold' : 'text-rose-500'}`}>
-                  {formatCurrency(totals.net)}
-                </p>
-              </div>
-              <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${totals.net >= 0 ? 'bg-gold/10' : 'bg-rose-500/10'}`}>
-                <Wallet className={`h-5 w-5 ${totals.net >= 0 ? 'text-gold' : 'text-rose-500'}`} />
-              </div>
-            </div>
-          </div>
+          <Button
+            onClick={() => { setEditing(null); setForm({ type: 'IN', amount: 0, description: '', category: '' }); setFormErrors({}); setShowModal(true) }}
+            leftIcon={<Wallet className="h-4 w-4" />}
+          >
+            Add Entry
+          </Button>
         </div>
 
+        {/* Summary cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <Card className="flex items-center gap-4" padding="md">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-success/10">
+              <TrendingUp className="h-6 w-6 text-success" />
+            </div>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total Cash In</p>
+              <p className="text-2xl font-bold text-success">{formatCurrency(totals.in)}</p>
+            </div>
+          </Card>
+          <Card className="flex items-center gap-4" padding="md">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-danger/10">
+              <TrendingDown className="h-6 w-6 text-danger" />
+            </div>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total Cash Out</p>
+              <p className="text-2xl font-bold text-danger">{formatCurrency(totals.out)}</p>
+            </div>
+          </Card>
+          <Card className={cn(
+            'flex items-center gap-4',
+            totals.net >= 0 ? 'border-gold/30' : 'border-danger/30'
+          )} padding="md">
+            <div className={cn(
+              'flex h-12 w-12 items-center justify-center rounded-xl',
+              totals.net >= 0 ? 'bg-gold/10' : 'bg-danger/10'
+            )}>
+              <Wallet className={cn(
+                'h-6 w-6',
+                totals.net >= 0 ? 'text-gold' : 'text-danger'
+              )} />
+            </div>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Net Balance</p>
+              <p className={cn(
+                'text-2xl font-bold',
+                totals.net >= 0 ? 'text-gold' : 'text-danger'
+              )}>
+                {formatCurrency(totals.net)}
+              </p>
+            </div>
+          </Card>
+        </div>
+
+        {/* Search */}
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
@@ -162,164 +265,97 @@ export default function CashflowPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search entries..."
-            className="w-full rounded-lg border border-border bg-card pl-10 pr-4 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="w-full rounded-lg border border-border bg-card pl-10 pr-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 input-focus"
           />
         </div>
 
-        <div className="rounded-xl border border-border bg-card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/50">
-                  <th className="px-4 py-3 text-left font-medium text-muted-foreground">Date</th>
-                  <th className="px-4 py-3 text-left font-medium text-muted-foreground">Type</th>
-                  <th className="px-4 py-3 text-left font-medium text-muted-foreground">Description</th>
-                  <th className="px-4 py-3 text-left font-medium text-muted-foreground">Category</th>
-                  <th className="px-4 py-3 text-right font-medium text-muted-foreground">Amount</th>
-                  {isAdmin && <th className="px-4 py-3 text-right font-medium text-muted-foreground">Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {loading ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <tr key={i} className="border-b border-border">
-                      <td colSpan={isAdmin ? 6 : 5} className="px-4 py-4"><div className="h-4 w-3/4 animate-pulse rounded bg-muted" /></td>
-                    </tr>
-                  ))
-                ) : filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={isAdmin ? 6 : 5} className="px-4 py-8 text-center text-muted-foreground">No entries found</td>
-                  </tr>
-                ) : (
-                  filtered.map((e) => (
-                    <tr key={e.id} className="border-b border-border hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 text-muted-foreground">{new Date(e.created_at).toLocaleDateString()}</td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          e.type === 'IN'
-                            ? 'bg-emerald-500/10 text-emerald-500'
-                            : 'bg-rose-500/10 text-rose-500'
-                        }`}>
-                          {e.type === 'IN' ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                          {e.type}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-foreground">{e.description}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{e.category || '-'}</td>
-                      <td className="px-4 py-3 text-right font-medium text-foreground">{formatCurrency(e.amount)}</td>
-                      {isAdmin && (
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              onClick={() => openEdit(e)}
-                              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDelete(e.id)}
-                              className="rounded-md p-1.5 text-muted-foreground hover:bg-rose-500/10 hover:text-rose-500 transition-colors"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        {/* Table */}
+        <DataTable
+          data={filtered}
+          columns={columns}
+          keyExtractor={(row) => row.id}
+          loading={loading}
+          emptyState={
+            <EmptyState
+              icon="inbox"
+              title="No entries found"
+              description={search ? 'Try adjusting your search.' : 'Start tracking your cashflow by adding your first entry.'}
+            />
+          }
+        />
       </div>
 
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-card border border-border p-6 shadow-xl">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold text-foreground">{editing ? 'Edit Entry' : 'Add Cashflow Entry'}</h2>
-              <button onClick={() => { setShowModal(false); setEditing(null) }} className="rounded-md p-1.5 text-muted-foreground hover:bg-muted transition-colors">
-                <X className="h-4 w-4" />
+      {/* Modal */}
+      <Modal
+        isOpen={showModal}
+        onClose={() => { setShowModal(false); setEditing(null) }}
+        title={editing ? 'Edit Entry' : 'Add Cashflow Entry'}
+        description={editing ? 'Update transaction details' : 'Record a new cash transaction'}
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => { setShowModal(false); setEditing(null) }}>Cancel</Button>
+            <Button onClick={handleSubmit}>{editing ? 'Update' : 'Record'}</Button>
+          </>
+        }
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-1.5">Type</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, type: 'IN' })}
+                className={cn(
+                  'flex-1 flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-all duration-200',
+                  form.type === 'IN'
+                    ? 'border-success bg-success/10 text-success'
+                    : 'border-border text-muted-foreground hover:bg-muted'
+                )}
+              >
+                <TrendingUp className="h-4 w-4" />
+                Cash In
+              </button>
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, type: 'OUT' })}
+                className={cn(
+                  'flex-1 flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-all duration-200',
+                  form.type === 'OUT'
+                    ? 'border-danger bg-danger/10 text-danger'
+                    : 'border-border text-muted-foreground hover:bg-muted'
+                )}
+              >
+                <TrendingDown className="h-4 w-4" />
+                Cash Out
               </button>
             </div>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Type</label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setForm({ ...form, type: 'IN' })}
-                    className={`flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
-                      form.type === 'IN'
-                        ? 'border-emerald-500 bg-emerald-500/10 text-emerald-500'
-                        : 'border-border text-muted-foreground hover:bg-muted'
-                    }`}
-                  >
-                    Cash In
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setForm({ ...form, type: 'OUT' })}
-                    className={`flex-1 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
-                      form.type === 'OUT'
-                        ? 'border-rose-500 bg-rose-500/10 text-rose-500'
-                        : 'border-border text-muted-foreground hover:bg-muted'
-                    }`}
-                  >
-                    Cash Out
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Amount</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min={0.01}
-                  value={form.amount}
-                  onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })}
-                  required
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Description</label>
-                <input
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  required
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1">Category</label>
-                <input
-                  value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}
-                  placeholder="e.g. Sales, Rent, Supplies"
-                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => { setShowModal(false); setEditing(null) }}
-                  className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-                >
-                  {editing ? 'Update' : 'Record'}
-                </button>
-              </div>
-            </form>
           </div>
-        </div>
-      )}
+          <Input
+            label="Amount"
+            type="number"
+            step="0.01"
+            min={0.01}
+            value={form.amount}
+            onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })}
+            error={formErrors.amount}
+            required
+          />
+          <Input
+            label="Description"
+            value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })}
+            error={formErrors.description}
+            required
+          />
+          <Input
+            label="Category"
+            value={form.category}
+            onChange={(e) => setForm({ ...form, category: e.target.value })}
+            placeholder="e.g. Sales, Rent, Supplies"
+            helper="Optional category for grouping"
+          />
+        </form>
+      </Modal>
     </DashboardLayout>
   )
 }
