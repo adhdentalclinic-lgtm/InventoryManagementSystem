@@ -25,29 +25,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<any | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user ?? null)
-      if (data.session?.user) {
-        fetchProfile(data.session.user.id)
-      } else {
+    try {
+      supabase.auth.getSession().then(({ data }) => {
+        setUser(data.session?.user ?? null)
+        if (data.session?.user) {
+          fetchProfile(data.session.user.id)
+        } else {
+          setLoading(false)
+        }
+      }).catch((err) => {
+        console.error('Auth error:', err)
+        setError(err.message)
         setLoading(false)
-      }
-    })
+      })
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null)
-      if (session?.user) {
-        fetchProfile(session.user.id)
-      } else {
-        setProfile(null)
-        setLoading(false)
-      }
-    })
+      const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+        setUser(session?.user ?? null)
+        if (session?.user) {
+          fetchProfile(session.user.id)
+        } else {
+          setProfile(null)
+          setLoading(false)
+        }
+      })
 
-    return () => {
-      listener.subscription.unsubscribe()
+      return () => {
+        listener.subscription.unsubscribe()
+      }
+    } catch (err: any) {
+      console.error('Auth provider initialization error:', err)
+      setError(err.message || 'Failed to initialize authentication')
+      setLoading(false)
     }
   }, [])
 
@@ -87,6 +98,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, signOut }}>
+      {error && (
+        <div className="fixed top-0 left-0 right-0 bg-red-500 text-white p-4 z-50 text-center">
+          ⚠️ Configuration Error: {error}
+          <div className="text-sm mt-2">Make sure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are set.</div>
+        </div>
+      )}
       {children}
     </AuthContext.Provider>
   )
