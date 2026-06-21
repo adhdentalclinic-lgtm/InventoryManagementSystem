@@ -46,10 +46,10 @@ async function fetchMetrics(setLoading: React.Dispatch<React.SetStateAction<bool
   setLoading(true)
   try {
     const [{ data: products }, { data: cashIn }, { data: cashOut }, { data: movements }] = await Promise.all([
-      supabase.from<ProductMetricsRow>('products').select('quantity, cost_price, name, sku'),
-      supabase.from<{ amount: number }>('cashflow').select('amount').eq('type', 'IN'),
-      supabase.from<{ amount: number }>('cashflow').select('amount').eq('type', 'OUT'),
-      supabase.from<MovementRow>('stock_movements').select('*, products(name)').order('created_at', { ascending: false }).limit(5),
+      supabase.from('products').select('quantity, cost_price, name, sku').returns<ProductMetricsRow[]>(),
+      supabase.from('cashflow').select('amount').eq('type', 'IN').returns<{ amount: number }[]>(),
+      supabase.from('cashflow').select('amount').eq('type', 'OUT').returns<{ amount: number }[]>(),
+      supabase.from('stock_movements').select('*, products(name)').order('created_at', { ascending: false }).limit(5).returns<MovementRow[]>(),
     ])
 
     const totalItems = products?.length || 0
