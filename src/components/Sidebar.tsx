@@ -23,13 +23,16 @@ import { cn } from '@/lib/utils'
 
 const navItems = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Inventory', href: '/inventory', icon: Package },
-  { label: 'Stock Movement', href: '/stock', icon: ArrowLeftRight },
   { label: 'Cashflow', href: '/cashflow', icon: DollarSign },
 ]
 
 const adminNavItems = [
-  { label: 'Users', href: '/users', icon: Users },
+  { label: 'Products', href: '/inventory', icon: Package, role: 'admin' },
+  { label: 'Users', href: '/users', icon: Users, role: 'admin' },
+]
+
+const staffNavItems = [
+  { label: 'Order Dispatch', href: '/stock', icon: ArrowLeftRight, role: 'staff' },
 ]
 
 export default function Sidebar() {
@@ -77,6 +80,21 @@ export default function Sidebar() {
               <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Administration</span>
             </div>
             {adminNavItems.map((item) => (
+              <Link key={item.href} href={item.href} className={navLinkClass(item.href)}>
+                <item.icon className={cn('h-4 w-4 transition-colors', pathname === item.href ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground')} />
+                <span className="flex-1">{item.label}</span>
+                {pathname === item.href && <ChevronRight className="h-3.5 w-3.5 text-primary/60" />}
+              </Link>
+            ))}
+          </>
+        )}
+
+        {!isAdmin && (
+          <>
+            <div className="px-3 mt-6 mb-2">
+              <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Operations</span>
+            </div>
+            {staffNavItems.map((item) => (
               <Link key={item.href} href={item.href} className={navLinkClass(item.href)}>
                 <item.icon className={cn('h-4 w-4 transition-colors', pathname === item.href ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground')} />
                 <span className="flex-1">{item.label}</span>
