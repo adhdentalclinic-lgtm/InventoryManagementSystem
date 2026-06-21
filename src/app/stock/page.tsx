@@ -1,8 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import DashboardLayout from '@/components/DashboardLayout'
+import { useAuth } from '@/lib/auth'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -10,324 +12,340 @@ import { Modal } from '@/components/ui/Modal'
 import { Badge } from '@/components/ui/Badge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { DataTable } from '@/components/ui/DataTable'
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/Card'
-import { ArrowDownLeft, ArrowUpRight, Search, Package } from 'lucide-react'
+import { Search, Plus, Trash2, Image as ImageIcon, ArrowRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Product {
   id: string
   name: string
   sku: string
+  category: string
   quantity: number
+  selling_price: number
+  image_url: string | null
 }
 
-interface StockMovement {
-  id: string
+interface OrderItem {
   product_id: string
-  type: 'IN' | 'OUT'
+  product_name: string
+  selling_price: number
   quantity: number
-  note: string | null
-  created_at: string
-  products: { name: string; sku: string }
 }
 
-export default function StockPage() {
+export default function OrderDispatchPage() {
+  const router = useRouter()
+  const { profile, loading: authLoading } = useAuth()
+  const isStaff = profile?.role === 'staff'
+  
   const [products, setProducts] = useState<Product[]>([])
-  const [movements, setMovements] = useState<StockMovement[]>([])
   const [search, setSearch] = useState('')
   const [showModal, setShowModal] = useState(false)
-  const [form, setForm] = useState({ product_id: '', type: 'IN' as 'IN' | 'OUT', quantity: 1, note: '' })
-  const [formError, setFormError] = useState('')
+  const [orderItems, setOrderItems] = useState<OrderItem[]>([])
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null)
+  const [orderQty, setOrderQty] = useState(1)
+  const [orderError, setOrderError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
-    fetchData()
+    if (!authLoading && profile?.role === 'admin') {
+      router.replace('/inventory')
+    }
+  }, [authLoading, profile?.role, router])
+
+  useEffect(() => {
+    fetchProducts()
   }, [])
 
-  async function fetchData() {
+  async function fetchProducts() {
     setLoading(true)
-    const [{ data: prods }, { data: movs }] = await Promise.all([
-      supabase.from('products').select('id, name, sku, quantity').order('name'),
-      supabase.from('stock_movements').select('*, products(name, sku)').order('created_at', { ascending: false }).limit(100),
-    ])
-    setProducts(prods || [])
-    setMovements(movs || [])
+    const { data, error } = await supabase
+      .from('products')
+      .select('id, name, sku, category, quantity, selling_price, image_url')
+      .gt('quantity', 0)
+      .order('name')
+    if (error) {
+      toast.error('Failed to load products')
+    } else {
+      setProducts(data || [])
+    }
     setLoading(false)
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setFormError('')
-    const product = products.find((p) => p.id === form.product_id)
-    if (!product) {
-      setFormError('Select a product')
+  function addOrderItem() {
+    if (!selectedProduct || orderQty <= 0) {
+      setOrderError('Please select a product and enter quantity')
       return
     }
-    if (form.type === 'OUT' && product.quantity < form.quantity) {
-      setFormError(`Insufficient stock. Available: ${product.quantity}`)
+    if (orderQty > selectedProduct.quantity) {
+      setOrderError(`Insufficient stock. Available: ${selectedProduct.quantity}`)
       return
     }
-    const { error } = await supabase.from('stock_movements').insert([{
-      product_id: form.product_id,
-      type: form.type,
-      quantity: form.quantity,
-      note: form.note,
-    }])
-    if (error) {
-      toast.error(error.message)
+
+    const existingItem = orderItems.find(item => item.product_id === selectedProduct.id)
+    if (existingItem) {
+      const newQty = existingItem.quantity + orderQty
+      if (newQty > selectedProduct.quantity) {
+        setOrderError(`Insufficient stock. Available: ${selectedProduct.quantity}`)
+        return
+      }
+      setOrderItems(orderItems.map(item =>
+        item.product_id === selectedProduct.id
+          ? { ...item, quantity: newQty }
+          : item
+      ))
     } else {
-      toast.success(`Stock ${form.type === 'IN' ? 'added' : 'removed'} successfully`)
+      setOrderItems([...orderItems, {
+        product_id: selectedProduct.id,
+        product_name: selectedProduct.name,
+        selling_price: selectedProduct.selling_price,
+        quantity: orderQty,
+      }])
+    }
+
+    setSelectedProduct(null)
+    setOrderQty(1)
+    setOrderError('')
+  }
+
+  function removeOrderItem(productId: string) {
+    setOrderItems(orderItems.filter(item => item.product_id !== productId))
+  }
+
+  async function submitOrder() {
+    if (orderItems.length === 0) {
+      toast.error('Add at least one item to the order')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      // Create stock movements for each item
+      const movements = orderItems.map(item => ({
+        product_id: item.product_id,
+        type: 'OUT' as const,
+        quantity: item.quantity,
+        note: 'Order dispatch',
+      }))
+
+      const { error: moveError } = await supabase
+        .from('stock_movements')
+        .insert(movements)
+
+      if (moveError) throw moveError
+
+      // Calculate total revenue
+      const totalRevenue = orderItems.reduce((sum, item) => sum + (item.selling_price * item.quantity), 0)
+
+      // Create cashflow entry for order
+      const { error: cashError } = await supabase
+        .from('cashflow')
+        .insert([{
+          type: 'IN',
+          amount: totalRevenue,
+          description: `Order dispatch - ${orderItems.length} item(s)`,
+          category: 'sales',
+        }])
+
+      if (cashError) throw cashError
+
+      toast.success(`Order placed! Revenue: $${totalRevenue.toFixed(2)}`)
+      setOrderItems([])
+      fetchProducts()
       setShowModal(false)
-      setForm({ product_id: '', type: 'IN', quantity: 1, note: '' })
-      fetchData()
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to process order')
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  const filteredMovements = movements.filter(
-    (m) =>
-      m.products?.name?.toLowerCase().includes(search.toLowerCase()) ||
-      m.products?.sku?.toLowerCase().includes(search.toLowerCase())
+  const filteredProducts = products.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase()) ||
+    p.sku.toLowerCase().includes(search.toLowerCase()) ||
+    p.category.toLowerCase().includes(search.toLowerCase())
   )
 
-  const inCount = movements.filter((m) => m.type === 'IN').reduce((s, m) => s + m.quantity, 0)
-  const outCount = movements.filter((m) => m.type === 'OUT').reduce((s, m) => s + m.quantity, 0)
+  const totalOrderValue = orderItems.reduce((sum, item) => sum + (item.selling_price * item.quantity), 0)
+  const totalOrderQty = orderItems.reduce((sum, item) => sum + item.quantity, 0)
 
-  const columns = [
-    {
-      key: 'date',
-      header: 'Date',
-      render: (row: StockMovement) => (
-        <span className="text-muted-foreground">{new Date(row.created_at).toLocaleDateString()}</span>
-      ),
-      width: '120px',
-    },
-    {
-      key: 'product',
-      header: 'Product',
-      render: (row: StockMovement) => (
-        <div>
-          <p className="font-medium text-foreground">{row.products?.name}</p>
-          <p className="text-xs text-muted-foreground">{row.products?.sku}</p>
-        </div>
-      ),
-    },
-    {
-      key: 'type',
-      header: 'Type',
-      render: (row: StockMovement) => (
-        <Badge variant={row.type === 'IN' ? 'success' : 'danger'} dot>
-          {row.type}
-        </Badge>
-      ),
-      width: '100px',
-    },
-    {
-      key: 'quantity',
-      header: 'Quantity',
-      align: 'right' as const,
-      render: (row: StockMovement) => (
-        <span className="font-semibold text-foreground">{row.quantity}</span>
-      ),
-      width: '100px',
-    },
-    {
-      key: 'note',
-      header: 'Note',
-      render: (row: StockMovement) => (
-        <span className="text-muted-foreground truncate max-w-[200px] block">{row.note || '-'}</span>
-      ),
-    },
-  ]
+  const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val)
+
+  if (authLoading) return <DashboardLayout><div className="text-center py-8">Loading...</div></DashboardLayout>
+  if (profile?.role === 'admin') return null
 
   return (
     <DashboardLayout>
       <div className="space-y-6 animate-fade-in">
-        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-foreground tracking-tight">Stock Movement</h1>
-            <p className="text-sm text-muted-foreground mt-1">Track and manage stock transactions</p>
+            <h1 className="text-2xl font-bold text-foreground tracking-tight">Order Dispatch</h1>
+            <p className="text-sm text-muted-foreground mt-1">Create and manage customer orders</p>
           </div>
-          <Button onClick={() => setShowModal(true)} leftIcon={<ArrowDownLeft className="h-4 w-4" />}>
-            Record Movement
+          <Button onClick={() => setShowModal(true)} leftIcon={<Plus className="h-4 w-4" />}>
+            New Order
           </Button>
         </div>
 
-        {/* Summary cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <Card className="flex items-center gap-4" padding="md">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-success/10">
-              <ArrowDownLeft className="h-6 w-6 text-success" />
+        {orderItems.length > 0 && (
+          <div className="grid gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="rounded-lg border border-border bg-card p-4">
+                <p className="text-xs font-medium text-muted-foreground">Items</p>
+                <p className="text-2xl font-bold text-foreground mt-1">{orderItems.length}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-card p-4">
+                <p className="text-xs font-medium text-muted-foreground">Qty</p>
+                <p className="text-2xl font-bold text-foreground mt-1">{totalOrderQty}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-card p-4 col-span-2">
+                <p className="text-xs font-medium text-muted-foreground">Order Value</p>
+                <p className="text-2xl font-bold text-success mt-1">{formatCurrency(totalOrderValue)}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total In</p>
-              <p className="text-2xl font-bold text-foreground">{inCount.toLocaleString()}</p>
-            </div>
-          </Card>
-          <Card className="flex items-center gap-4" padding="md">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-danger/10">
-              <ArrowUpRight className="h-6 w-6 text-danger" />
-            </div>
-            <div>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Total Out</p>
-              <p className="text-2xl font-bold text-foreground">{outCount.toLocaleString()}</p>
-            </div>
-          </Card>
-          <Card className="flex items-center gap-4" padding="md">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-              <Package className="h-6 w-6 text-primary" />
-            </div>
-            <div>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Net Movement</p>
-              <p className="text-2xl font-bold text-foreground">{(inCount - outCount).toLocaleString()}</p>
-            </div>
-          </Card>
-        </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Movements table */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search movements..."
-                className="w-full rounded-lg border border-border bg-card pl-10 pr-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 input-focus"
-              />
-            </div>
-            <DataTable
-              data={filteredMovements}
-              columns={columns}
-              keyExtractor={(row) => row.id}
-              loading={loading}
-              emptyState={
-                <EmptyState
-                  icon="inbox"
-                  title="No movements recorded"
-                  description="Start tracking your stock movements by recording your first transaction."
-                />
-              }
-            />
+            <Button onClick={submitOrder} disabled={submitting} variant="success" className="w-full">
+              {submitting ? 'Processing...' : `Confirm Order - ${formatCurrency(totalOrderValue)}`}
+            </Button>
           </div>
+        )}
 
-          {/* Stock levels */}
-          <div className="space-y-4">
-            <Card>
-              <CardHeader>
-                <div>
-                  <CardTitle>Stock Levels</CardTitle>
-                  <CardDescription>Current inventory status</CardDescription>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-2 max-h-[500px] overflow-y-auto">
-                {products.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between p-2.5 rounded-lg hover:bg-muted transition-colors">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className={cn(
-                        'flex h-8 w-8 items-center justify-center rounded-lg flex-shrink-0',
-                        p.quantity <= 5 ? 'bg-danger/10' : p.quantity <= 20 ? 'bg-warning/10' : 'bg-success/10'
-                      )}>
-                        <Package className={cn(
-                          'h-3.5 w-3.5',
-                          p.quantity <= 5 ? 'text-danger' : p.quantity <= 20 ? 'text-warning' : 'text-success'
-                        )} />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-foreground truncate">{p.name}</p>
-                        <p className="text-xs text-muted-foreground">{p.sku}</p>
-                      </div>
-                    </div>
-                    <span className={cn(
-                      'text-sm font-bold flex-shrink-0',
-                      p.quantity <= 5 ? 'text-danger' : p.quantity <= 20 ? 'text-warning' : 'text-foreground'
-                    )}>
-                      {p.quantity}
-                    </span>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+        {orderItems.length === 0 && (
+          <div className="rounded-lg border border-dashed border-border bg-muted/30 p-8 text-center">
+            <ArrowRight className="h-8 w-8 text-muted-foreground mx-auto opacity-50" />
+            <p className="text-muted-foreground mt-2">No items in order. Create a new order to get started.</p>
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Modal */}
       <Modal
         isOpen={showModal}
-        onClose={() => setShowModal(false)}
-        title="Record Stock Movement"
-        description="Add or remove stock from your inventory"
+        onClose={() => {
+          setShowModal(false)
+          setSelectedProduct(null)
+          setOrderQty(1)
+          setOrderError('')
+        }}
+        title="Add Products to Order"
+        size="lg"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
-            <Button onClick={handleSubmit}>Record Movement</Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowModal(false)
+                setSelectedProduct(null)
+                setOrderQty(1)
+                setOrderError('')
+              }}
+            >
+              Close
+            </Button>
+            <Button onClick={addOrderItem} disabled={!selectedProduct || orderQty <= 0}>
+              Add to Order
+            </Button>
           </>
         }
       >
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Product</label>
-            <select
-              value={form.product_id}
-              onChange={(e) => setForm({ ...form, product_id: e.target.value })}
-              required
-              className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground input-focus"
-            >
-              <option value="">Select a product</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>{p.name} ({p.sku}) - Qty: {p.quantity}</option>
-              ))}
-            </select>
+        <div className="space-y-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search products..."
+              className="w-full rounded-lg border border-border bg-card pl-10 pr-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/60 input-focus"
+            />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Type</label>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setForm({ ...form, type: 'IN' })}
-                className={cn(
-                  'flex-1 flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-all duration-200',
-                  form.type === 'IN'
-                    ? 'border-success bg-success/10 text-success'
-                    : 'border-border text-muted-foreground hover:bg-muted'
-                )}
-              >
-                <ArrowDownLeft className="h-4 w-4" />
-                Stock In
-              </button>
-              <button
-                type="button"
-                onClick={() => setForm({ ...form, type: 'OUT' })}
-                className={cn(
-                  'flex-1 flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-all duration-200',
-                  form.type === 'OUT'
-                    ? 'border-danger bg-danger/10 text-danger'
-                    : 'border-border text-muted-foreground hover:bg-muted'
-                )}
-              >
-                <ArrowUpRight className="h-4 w-4" />
-                Stock Out
-              </button>
+
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {filteredProducts.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-muted-foreground">No products available</p>
+              </div>
+            ) : (
+              filteredProducts.map(product => (
+                <button
+                  key={product.id}
+                  onClick={() => {
+                    setSelectedProduct(product)
+                    setOrderError('')
+                  }}
+                  className={cn(
+                    'w-full text-left p-3 rounded-lg border transition-colors',
+                    selectedProduct?.id === product.id
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:bg-muted'
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    {product.image_url ? (
+                      <img src={product.image_url} alt="" className="h-10 w-10 rounded object-cover border border-border" />
+                    ) : (
+                      <div className="h-10 w-10 rounded bg-muted flex items-center justify-center border border-border">
+                        <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-foreground">{product.name}</p>
+                      <p className="text-xs text-muted-foreground">{product.sku} • {product.category}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="font-semibold text-foreground">{formatCurrency(product.selling_price)}</p>
+                      <p className="text-xs text-muted-foreground">{product.quantity} in stock</p>
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+
+          {selectedProduct && (
+            <div className="rounded-lg border border-border bg-muted/50 p-4">
+              <p className="text-sm font-medium text-foreground mb-3">Selected: {selectedProduct.name}</p>
+              <Input
+                label="Quantity"
+                type="number"
+                min={1}
+                max={selectedProduct.quantity}
+                value={orderQty}
+                onChange={(e) => {
+                  setOrderQty(parseInt(e.target.value) || 1)
+                  setOrderError('')
+                }}
+                helper={`Available: ${selectedProduct.quantity} units`}
+              />
+              <div className="mt-3 p-2 bg-card rounded text-sm">
+                <p className="text-muted-foreground">Line total: <span className="font-semibold text-foreground">{formatCurrency(selectedProduct.selling_price * orderQty)}</span></p>
+              </div>
             </div>
-          </div>
-          <Input
-            label="Quantity"
-            type="number"
-            min={1}
-            value={form.quantity}
-            onChange={(e) => setForm({ ...form, quantity: parseInt(e.target.value) || 1 })}
-            required
-          />
-          <Input
-            label="Note"
-            value={form.note}
-            onChange={(e) => setForm({ ...form, note: e.target.value })}
-            placeholder="Optional note..."
-          />
-          {formError && <p className="text-sm text-danger">{formError}</p>}
-        </form>
+          )}
+
+          {orderError && (
+            <div className="p-3 rounded-lg bg-danger/10 border border-danger/30 text-sm text-danger">
+              {orderError}
+            </div>
+          )}
+
+          {orderItems.length > 0 && (
+            <div className="border-t border-border pt-4">
+              <p className="text-sm font-medium text-foreground mb-2">Current Order ({orderItems.length} items):</p>
+              <div className="space-y-2">
+                {orderItems.map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between p-2 rounded bg-muted/50 text-sm">
+                    <span className="text-foreground">{item.product_name} × {item.quantity}</span>
+                    <span className="font-semibold text-foreground">{formatCurrency(item.selling_price * item.quantity)}</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between p-2 rounded bg-primary/5 border border-primary/20 text-sm font-semibold">
+                  <span className="text-foreground">Total</span>
+                  <span className="text-primary">{formatCurrency(totalOrderValue)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </Modal>
     </DashboardLayout>
   )
