@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import DashboardLayout from '@/components/DashboardLayout'
 import { useAuth } from '@/lib/auth'
@@ -11,7 +12,7 @@ import { Modal } from '@/components/ui/Modal'
 import { Badge } from '@/components/ui/Badge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { DataTable } from '@/components/ui/DataTable'
-import { Search, Plus, Pencil, Trash2, Package, Image as ImageIcon, ListFilter as Filter, X } from 'lucide-react'
+import { Search, Plus, Pencil, Trash2, Image as ImageIcon, ListFilter as Filter, X, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Product {
@@ -27,14 +28,19 @@ interface Product {
 }
 
 export default function InventoryPage() {
-  const { profile } = useAuth()
+  const router = useRouter()
+  const { profile, loading: authLoading } = useAuth()
   const isAdmin = profile?.role === 'admin'
+  
   const [products, setProducts] = useState<Product[]>([])
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
+  const [showRestockModal, setShowRestockModal] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
+  const [restockingProduct, setRestockingProduct] = useState<Product | null>(null)
+  const [restockQty, setRestockQty] = useState(0)
   const [form, setForm] = useState({
     name: '',
     sku: '',
@@ -47,8 +53,16 @@ export default function InventoryPage() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
-    fetchProducts()
-  }, [])
+    if (!authLoading && !isAdmin) {
+      router.replace('/stock')
+    }
+  }, [authLoading, isAdmin, router])
+
+  useEffect(() => {
+    if (isAdmin) {
+      fetchProducts()
+    }
+  }, [isAdmin])
 
   async function fetchProducts() {
     setLoading(true)
@@ -75,10 +89,6 @@ export default function InventoryPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!isAdmin) {
-      toast.error('Only admins can manage products')
-      return
-    }
     if (!validateForm()) return
 
     if (editing) {
@@ -102,11 +112,32 @@ export default function InventoryPage() {
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!isAdmin) {
-      toast.error('Only admins can delete products')
+  async function handleRestock(e: React.FormEvent) {
+    e.preventDefault()
+    if (!restockingProduct || restockQty <= 0) {
+      toast.error('Enter a valid quantity')
       return
     }
+
+    const { error: moveError } = await supabase.from('stock_movements').insert([{
+      product_id: restockingProduct.id,
+      type: 'IN',
+      quantity: restockQty,
+      note: 'Admin restock',
+    }])
+
+    if (moveError) {
+      toast.error(moveError.message)
+    } else {
+      toast.success(`Restocked ${restockQty} units`)
+      setShowRestockModal(false)
+      setRestockingProduct(null)
+      setRestockQty(0)
+      fetchProducts()
+    }
+  }
+
+  async function handleDelete(id: string) {
     if (!confirm('Are you sure you want to delete this product? This action cannot be undone.')) return
     const { error } = await supabase.from('products').delete().eq('id', id)
     if (error) toast.error(error.message)
@@ -117,7 +148,6 @@ export default function InventoryPage() {
   }
 
   function openEdit(product: Product) {
-    if (!isAdmin) return
     setEditing(product)
     setForm({
       name: product.name,
@@ -130,6 +160,12 @@ export default function InventoryPage() {
     })
     setFormErrors({})
     setShowModal(true)
+  }
+
+  function openRestock(product: Product) {
+    setRestockingProduct(product)
+    setRestockQty(0)
+    setShowRestockModal(true)
   }
 
   function openCreate() {
@@ -151,6 +187,10 @@ export default function InventoryPage() {
   })
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val)
+  const calculateMargin = (cost: number, selling: number) => {
+    if (cost === 0) return 0
+    return ((selling - cost) / cost) * 100
+  }
 
   const columns = [
     {
@@ -180,37 +220,60 @@ export default function InventoryPage() {
       ),
     },
     {
+      key: 'cost_price',
+      header: 'Cost Price',
+      align: 'right' as const,
+      render: (row: Product) => <span className="text-muted-foreground">{formatCurrency(row.cost_price)}</span>,
+    },
+    {
+      key: 'selling_price',
+      header: 'Selling Price',
+      align: 'right' as const,
+      render: (row: Product) => <span className="font-medium text-foreground">{formatCurrency(row.selling_price)}</span>,
+    },
+    {
+      key: 'margin',
+      header: 'Margin %',
+      align: 'right' as const,
+      render: (row: Product) => {
+        const margin = calculateMargin(row.cost_price, row.selling_price)
+        return (
+          <span className={cn(
+            'font-semibold',
+            margin < 10 ? 'text-danger' : margin < 20 ? 'text-warning' : 'text-success'
+          )}>
+            {margin.toFixed(1)}%
+          </span>
+        )
+      },
+    },
+    {
       key: 'quantity',
       header: 'Quantity',
       align: 'right' as const,
       render: (row: Product) => (
         <span className={cn(
           'font-semibold',
-          row.quantity <= 5 ? 'text-danger' : row.quantity <= 20 ? 'text-warning' : 'text-foreground'
+          row.quantity === 0 ? 'text-danger' : row.quantity <= 10 ? 'text-warning' : 'text-foreground'
         )}>
           {row.quantity}
         </span>
       ),
     },
     {
-      key: 'cost_price',
-      header: 'Cost',
-      align: 'right' as const,
-      render: (row: Product) => <span className="text-muted-foreground">{formatCurrency(row.cost_price)}</span>,
-    },
-    {
-      key: 'selling_price',
-      header: 'Price',
-      align: 'right' as const,
-      render: (row: Product) => <span className="font-medium text-foreground">{formatCurrency(row.selling_price)}</span>,
-    },
-    ...(isAdmin ? [{
       key: 'actions',
-      header: '',
+      header: 'Actions',
       align: 'right' as const,
-      width: '100px',
+      width: '140px',
       render: (row: Product) => (
         <div className="flex items-center justify-end gap-1">
+          <button
+            onClick={() => openRestock(row)}
+            className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            title="Restock"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
           <button
             onClick={() => openEdit(row)}
             className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
@@ -227,26 +290,25 @@ export default function InventoryPage() {
           </button>
         </div>
       ),
-    }] : []),
+    },
   ]
+
+  if (authLoading) return <DashboardLayout><div className="text-center py-8">Loading...</div></DashboardLayout>
+  if (!isAdmin) return null
 
   return (
     <DashboardLayout>
       <div className="space-y-6 animate-fade-in">
-        {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-foreground tracking-tight">Inventory</h1>
-            <p className="text-sm text-muted-foreground mt-1">Manage your products and stock levels</p>
+            <h1 className="text-2xl font-bold text-foreground tracking-tight">Product Management</h1>
+            <p className="text-sm text-muted-foreground mt-1">Manage products, pricing, and inventory</p>
           </div>
-          {isAdmin && (
-            <Button onClick={openCreate} leftIcon={<Plus className="h-4 w-4" />}>
-              Add Product
-            </Button>
-          )}
+          <Button onClick={openCreate} leftIcon={<Plus className="h-4 w-4" />}>
+            Add Product
+          </Button>
         </div>
 
-        {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -285,7 +347,6 @@ export default function InventoryPage() {
           )}
         </div>
 
-        {/* Stats bar */}
         <div className="flex flex-wrap items-center gap-4 text-sm">
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full bg-success" />
@@ -304,7 +365,6 @@ export default function InventoryPage() {
           </div>
         </div>
 
-        {/* Table */}
         <DataTable
           data={filtered}
           columns={columns}
@@ -315,7 +375,7 @@ export default function InventoryPage() {
               icon="package"
               title="No products found"
               description={search ? 'Try adjusting your search or filters.' : 'Get started by adding your first product.'}
-              action={isAdmin && !search ? (
+              action={!search ? (
                 <Button onClick={openCreate} leftIcon={<Plus className="h-4 w-4" />}>
                   Add Product
                 </Button>
@@ -325,7 +385,6 @@ export default function InventoryPage() {
         />
       </div>
 
-      {/* Modal */}
       <Modal
         isOpen={showModal}
         onClose={() => { setShowModal(false); setEditing(null) }}
@@ -409,6 +468,47 @@ export default function InventoryPage() {
             placeholder="https://..."
             helper="Optional product image"
           />
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={showRestockModal}
+        onClose={() => { setShowRestockModal(false); setRestockingProduct(null) }}
+        title="Restock Product"
+        description={`Add stock to ${restockingProduct?.name}`}
+        size="sm"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => { setShowRestockModal(false); setRestockingProduct(null) }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleRestock}>
+              Confirm Restock
+            </Button>
+          </>
+        }
+      >
+        <form onSubmit={handleRestock} className="space-y-4">
+          <Input
+            label="Quantity to Add"
+            type="number"
+            min={1}
+            value={restockQty}
+            onChange={(e) => setRestockQty(parseInt(e.target.value) || 0)}
+            required
+            autoFocus
+          />
+          <div className="bg-muted/50 p-3 rounded-lg text-sm">
+            <p className="text-muted-foreground">
+              Current stock: <span className="font-semibold text-foreground">{restockingProduct?.quantity}</span>
+            </p>
+            <p className="text-muted-foreground mt-1">
+              After restock: <span className="font-semibold text-foreground">{(restockingProduct?.quantity || 0) + restockQty}</span>
+            </p>
+          </div>
         </form>
       </Modal>
     </DashboardLayout>
